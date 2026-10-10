@@ -9383,7 +9383,12 @@ void test_auto_word_segmentation_commit_decision() {
             }
             CommitTransformRequest request;
             request.raw_token = raw;
-            request.display_token = engine.GetDisplayString();
+            // CommitTransformRequest stores string_views. Keep the display
+            // string alive until DecideCommitTransform has copied it; assigning
+            // the temporary returned by GetDisplayString() leaves a dangling
+            // view (which surfaced as a leading NUL in the 32-bit test binary).
+            const std::wstring display_token = engine.GetDisplayString();
+            request.display_token = display_token;
             request.method = method;
             request.correction_level = level;
             request.delimiter = L' ';
