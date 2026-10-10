@@ -49,7 +49,7 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Checkout source at release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag }}
           fetch-depth: 0
