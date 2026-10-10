@@ -27,7 +27,7 @@ jobs:
       - name: Checkout latest source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -102,10 +102,11 @@ jobs:
 
           $previousSha = $null
           $releaseExists = $false
-          gh release view "$env:RELEASE_TAG" --json tagName,body,isPrerelease 2>$null | Out-File -FilePath release-info.json -Encoding utf8
-          if ($LASTEXITCODE -eq 0) {
+          $releaseInfoJson = gh release view "$env:RELEASE_TAG" --json tagName,body,isPrerelease 2>$null
+          $releaseViewExit = $LASTEXITCODE
+          if ($releaseViewExit -eq 0) {
             $releaseExists = $true
-            $info = Get-Content release-info.json -Raw | ConvertFrom-Json
+            $info = ($releaseInfoJson -join "`n") | ConvertFrom-Json
             $previousTagSha = git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}" 2>$null
             if ($LASTEXITCODE -eq 0) { $previousSha = "$previousTagSha".Trim() }
           }
@@ -117,21 +118,21 @@ jobs:
             $commitLines = git log -n 20 --reverse --format="* %s (%h)" "$currentSha"
           }
           if (-not $commitLines) { $commitLines = @("* Automated build of commit $($currentSha.Substring(0, 7)).") }
-          $notes = @"
-          ## Neokey $env:RELEASE_VERSION (development build)
-
-          Automatically built from commit [$($currentSha.Substring(0, 7))](https://github.com/$env:GITHUB_REPOSITORY/commit/$currentSha).
-
-          ### Changes since the previous dev build
-          $($commitLines -join "`n")
-
-          > This is an automatically updated development pre-release. It may contain bugs and is not a stable release.
-          "@
+          $notes = @(
+            "## Neokey $env:RELEASE_VERSION (development build)",
+            "",
+            "Automatically built from commit [$($currentSha.Substring(0, 7))](https://github.com/$env:GITHUB_REPOSITORY/commit/$currentSha).",
+            "",
+            "### Changes since the previous dev build",
+            ($commitLines -join "`n"),
+            "",
+            "> This is an automatically updated development pre-release. It may contain bugs and is not a stable release."
+          ) -join "`n"
 
           if ($releaseExists) {
             gh release upload "$env:RELEASE_TAG" dist/NeokeySetup.exe dist/Neokey-portable.zip dist/Neokey-arm64-preview.zip dist/SHA256SUMS.txt --clobber
             if ($LASTEXITCODE -ne 0) { throw "Failed to replace assets in the existing pre-release." }
-            gh release edit "$env:RELEASE_TAG" --title "Neokey $env:RELEASE_VERSION (dev)" --notes "$notes" --prerelease
+            gh release edit "$env:RELEASE_TAG" --title "Neokey $env:RELEASE_VERSION (dev)" --notes "$notes"
             if ($LASTEXITCODE -ne 0) { throw "Failed to update existing pre-release notes." }
           } else {
             gh release create "$env:RELEASE_TAG" dist/NeokeySetup.exe dist/Neokey-portable.zip dist/Neokey-arm64-preview.zip dist/SHA256SUMS.txt --title "Neokey $env:RELEASE_VERSION (dev)" --notes "$notes" --prerelease
