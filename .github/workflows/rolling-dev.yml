@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - ".github/workflows/rolling-dev.yml"
   workflow_dispatch:
 
 permissions:
@@ -72,8 +70,9 @@ jobs:
       - name: Build, test, and package
         shell: pwsh
         run: |
-          ./package.bat -SkipTests -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
-          if ($LASTEXITCODE -ne 0) { throw "package.bat failed with exit code $LASTEXITCODE" }
+          Write-Host "Packaging dev artifacts with package.ps1 -SkipTests; tests are run in dedicated workflow steps below."
+          & ./package.ps1 -SkipTests -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
+          if ($LASTEXITCODE -ne 0) { throw "package.ps1 failed with exit code $LASTEXITCODE" }
 
       - name: Run x64 core and setup tests
         shell: pwsh
