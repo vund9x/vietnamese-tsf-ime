@@ -99,6 +99,44 @@ jobs:
             exit 1
           }
 
+      - name: Scan release artifacts with Microsoft Defender
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Command Update-MpSignature -ErrorAction SilentlyContinue) -or
+              -not (Get-Command Start-MpScan -ErrorAction SilentlyContinue) -or
+              -not (Get-Command Get-MpThreatDetection -ErrorAction SilentlyContinue)) {
+            throw "Microsoft Defender scanning cmdlets are unavailable on this runner."
+          }
+
+          Update-MpSignature
+          $scanRoot = (Resolve-Path "dist").Path
+          $expandedRoot = Join-Path $env:RUNNER_TEMP "neokey-scan-expanded"
+          New-Item -ItemType Directory -Force -Path $expandedRoot | Out-Null
+
+          # Expand archives as well, so their contents are scanned independently.
+          Get-ChildItem -Path $scanRoot -Filter "*.zip" -File | ForEach-Object {
+            $target = Join-Path $expandedRoot $_.BaseName
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            Expand-Archive -LiteralPath $_.FullName -DestinationPath $target -Force
+          }
+
+          $scanPaths = @($scanRoot, $expandedRoot)
+          $scanStarted = Get-Date
+          foreach ($scanPath in $scanPaths) {
+            Write-Host "Microsoft Defender custom scan: $scanPath"
+            Start-MpScan -ScanType CustomScan -ScanPath $scanPath
+          }
+
+          $detections = @(Get-MpThreatDetection | Where-Object {
+            $_.InitialDetectionTime -and $_.InitialDetectionTime -ge $scanStarted.AddMinutes(-2)
+          })
+          if ($detections.Count -gt 0) {
+            $detections | Format-List ThreatID,ThreatStatusID,InitialDetectionTime,Resources | Out-String | Write-Host
+            throw "Microsoft Defender reported one or more recent threats. Release publication is blocked."
+          }
+          Write-Host "Microsoft Defender scan completed without reported detections."
+
       - name: Prepare checksums
         shell: pwsh
         run: |
