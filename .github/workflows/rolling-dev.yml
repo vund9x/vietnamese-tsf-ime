@@ -47,7 +47,20 @@ jobs:
       - name: Install Inno Setup 7
         shell: pwsh
         run: |
-          winget install --id JRSoftware.InnoSetup --exact --silent --accept-package-agreements --accept-source-agreements
+          $ErrorActionPreference = "Stop"
+          $version = "7.1.0"
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-$version-x64.exe"
+          $url = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-$version-x64.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $signature = Get-AuthenticodeSignature $installer
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Pyrsys B\.V\.") {
+            throw "Inno Setup installer signature validation failed."
+          }
+
+          $process = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ALLUSERS" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installer failed with exit code $($process.ExitCode)." }
+
           $candidates = @(
             "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
             "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
@@ -56,7 +69,6 @@ jobs:
           $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) { throw "Inno Setup 7 ISCC.exe was not found after installation." }
           "INNO_COMPILER=$iscc" >> $env:GITHUB_ENV
-
       - name: Build, test, and package
         shell: pwsh
         run: |
