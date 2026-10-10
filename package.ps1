@@ -468,12 +468,24 @@ if ($Installer) {
             Remove-Item -LiteralPath $installerPath -Force
         }
 
+        # Pass paths relative to the repository root. Inno Setup 7.1 on the
+        # Windows runner treated the absolute drive-qualified macro value as
+        # relative and produced an invalid path such as D:\D:\a\... (I/O 123).
+        # Relative paths also avoid embedding the runner's checkout path in the
+        # preprocessor arguments.
+        $packagePathForInno = [System.IO.Path]::GetRelativePath($repoRoot, $packageDir)
+        $outputPathForInno = [System.IO.Path]::GetRelativePath($repoRoot, $DistRoot)
         $versionArg = "/DMyAppVersion=$releaseVersion"
-        $packageArg = '/DMyPackageDir="' + $packageDir + '"'
-        $outputArg = '/DMyOutputDir="' + $DistRoot + '"'
-        & $compiler $versionArg $packageArg $outputArg $setupScript
-        if ($LASTEXITCODE -ne 0) {
-            throw "ISCC.exe failed with exit code $LASTEXITCODE"
+        $packageArg = '/DMyPackageDir="' + $packagePathForInno + '"'
+        $outputArg = '/DMyOutputDir="' + $outputPathForInno + '"'
+        Push-Location $repoRoot
+        try {
+            & $compiler $versionArg $packageArg $outputArg $setupScript
+            if ($LASTEXITCODE -ne 0) {
+                throw "ISCC.exe failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            Pop-Location
         }
         if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
             throw "Installer output missing: $installerPath"
