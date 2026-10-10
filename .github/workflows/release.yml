@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-dev*"
+      - "!v*-alpha*"
+      - "!v*-beta*"
+      - "!v*-rc*"
   workflow_dispatch:
     inputs:
       tag:
@@ -38,6 +42,94 @@ jobs:
           }
           if ($tag -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
             throw "Tag must look like v0.1.21 or v0.1.21-rc.1; received: $tag"
+          }
+          if ($tag -match '-(dev|alpha|beta|rc)([.-].*)?
+
+      - name: Checkout source at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Validate VERSION matches tag
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $tagVersion = "${{ steps.release.outputs.tag }}".Substring(1)
+          if ($version -ne $tagVersion) {
+            throw "VERSION ($version) must match release tag ($tagVersion). Update VERSION, commit, and create the tag again."
+          }
+
+      - name: Install Inno Setup 7
+        shell: pwsh
+        run: |
+          winget install --id JRSoftware.InnoSetup --exact --silent --accept-package-agreements --accept-source-agreements
+          $candidates = @(
+            "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 7 ISCC.exe was not found after installation." }
+          "INNO_COMPILER=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build, test, and package x64/x86 installer and ARM64 preview
+        shell: pwsh
+        run: |
+          ./package.bat -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
+          if ($LASTEXITCODE -ne 0) { throw "package.bat failed with exit code $LASTEXITCODE" }
+
+      - name: Prepare release assets and checksums
+        shell: pwsh
+        run: |
+          $assets = @(
+            "dist/NeokeySetup.exe",
+            "dist/Neokey-portable.zip",
+            "dist/Neokey-arm64-preview.zip"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset -PathType Leaf)) { throw "Missing expected release asset: $asset" }
+          }
+          $lines = foreach ($asset in $assets) {
+            $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash *$(Split-Path $asset -Leaf)"
+          }
+          $lines | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+          Get-ChildItem dist -File | Select-Object Name,Length
+
+      - name: Generate signed build provenance attestations
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/NeokeySetup.exe
+            dist/Neokey-portable.zip
+            dist/Neokey-arm64-preview.zip
+            dist/SHA256SUMS.txt
+
+      - name: Create draft release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release view "$env:RELEASE_TAG" --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "A release for $env:RELEASE_TAG already exists. Refusing to overwrite it."
+          }
+          gh release create "$env:RELEASE_TAG" dist/NeokeySetup.exe dist/Neokey-portable.zip dist/Neokey-arm64-preview.zip dist/SHA256SUMS.txt --draft --title "Neokey $($env:RELEASE_TAG)" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "Failed to create draft release." }
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: pwsh
+        run: |
+          gh release edit "$env:RELEASE_TAG" --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Failed to publish release." }
+) {
+            throw "Development/prerelease tags are managed by rolling-dev.yml, not this stable release workflow."
           }
           "tag=$tag" >> $env:GITHUB_OUTPUT
 
