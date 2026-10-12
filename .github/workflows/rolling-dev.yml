@@ -35,7 +35,16 @@ jobs:
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
           $version = $version -replace '^v', ''
-          if ($version -notmatch '^\d+\.\d+\.\d+-dev(?:[.-][0-9A-Za-z.-]+)?
+          if ($version -notmatch '^\d+\.\d+\.\d+-dev(?:[.-][0-9A-Za-z.-]+)?$') {
+            Write-Host "Skipping rolling dev release: VERSION '$version' is not a dev version."
+            Write-Host "Use a version such as 0.1.21-dev in VERSION to enable this workflow."
+            "skip=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $tag = "v$version"
+          "skip=false" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Install Inno Setup 7
         if: steps.release.outputs.skip != 'true'
