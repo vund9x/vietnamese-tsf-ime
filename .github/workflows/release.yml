@@ -89,8 +89,8 @@ jobs:
       - name: Build, test, and package x64/x86 installer and ARM64 preview
         shell: pwsh
         run: |
-          ./package.bat -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
-          if ($LASTEXITCODE -ne 0) { throw "package.bat failed with exit code $LASTEXITCODE" }
+          & ./.github/scripts/ci-package.ps1 -Mode Stable -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
+          if ($LASTEXITCODE -ne 0) { throw "ci-package.ps1 failed with exit code $LASTEXITCODE" }
 
       - name: Scan release artifacts with Microsoft Defender
         shell: pwsh
