@@ -70,9 +70,8 @@ jobs:
       - name: Build, test, and package
         shell: pwsh
         run: |
-          Write-Host "Packaging dev artifacts with package.ps1 -SkipTests; tests are run in dedicated workflow steps below."
-          & ./package.ps1 -SkipTests -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
-          if ($LASTEXITCODE -ne 0) { throw "package.ps1 failed with exit code $LASTEXITCODE" }
+          & ./.github/scripts/ci-package.ps1 -Mode Dev -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
+          if ($LASTEXITCODE -ne 0) { throw "ci-package.ps1 failed with exit code $LASTEXITCODE" }
 
       - name: Run x64 core and setup tests
         shell: pwsh
