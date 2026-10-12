@@ -89,8 +89,10 @@ jobs:
       - name: Build, test, and package x64/x86 installer and ARM64 preview
         shell: pwsh
         run: |
-          & ./.github/scripts/ci-package.ps1 -Mode Stable -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
-          if ($LASTEXITCODE -ne 0) { throw "ci-package.ps1 failed with exit code $LASTEXITCODE" }
+          # Stable builds check out the release tag, which may predate the fork-only CI wrapper.
+          # package.bat delegates to package.ps1 in the tagged source and preserves blocking tests.
+          & ./package.bat -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
+          if ($LASTEXITCODE -ne 0) { throw "package.bat failed with exit code $LASTEXITCODE" }
 
       - name: Scan release artifacts with Microsoft Defender
         shell: pwsh
