@@ -37,8 +37,8 @@ jobs:
           $version = $version -replace '^v', ''
           if ($version -notmatch '^\d+\.\d+\.\d+-dev(?:[.-][0-9A-Za-z.-]+)?
 
-      if: steps.release.outputs.skip != 'true'
       - name: Install Inno Setup 7
+        if: steps.release.outputs.skip != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -63,15 +63,15 @@ jobs:
           $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) { throw "Inno Setup 7 ISCC.exe was not found after installation." }
           "INNO_COMPILER=$iscc" >> $env:GITHUB_ENV
-      if: steps.release.outputs.skip != 'true'
       - name: Build, test, and package
+        if: steps.release.outputs.skip != 'true'
         shell: pwsh
         run: |
           & ./.github/scripts/ci-package.ps1 -Mode Dev -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
           if ($LASTEXITCODE -ne 0) { throw "ci-package.ps1 failed with exit code $LASTEXITCODE" }
 
-      if: steps.release.outputs.skip != 'true'
       - name: Run x64 core and setup tests
+        if: steps.release.outputs.skip != 'true'
         shell: pwsh
         run: |
           $tests = @(
@@ -84,8 +84,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "$test failed with exit code $LASTEXITCODE" }
           }
 
-      if: steps.release.outputs.skip != 'true'
       - name: Run x86 core tests (non-blocking for rolling dev)
+        if: steps.release.outputs.skip != 'true'
         continue-on-error: true
         shell: pwsh
         run: |
@@ -97,8 +97,8 @@ jobs:
             exit 1
           }
 
-      if: steps.release.outputs.skip != 'true'
       - name: Scan release artifacts with Microsoft Defender
+        if: steps.release.outputs.skip != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -136,8 +136,8 @@ jobs:
           }
           Write-Host "Microsoft Defender scan completed without reported detections."
 
-      if: steps.release.outputs.skip != 'true'
       - name: Prepare checksums
+        if: steps.release.outputs.skip != 'true'
         shell: pwsh
         run: |
           $assets = @(
@@ -154,8 +154,8 @@ jobs:
           }
           $lines | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
 
-      if: steps.release.outputs.skip != 'true'
       - name: Generate artifact attestations
+        if: steps.release.outputs.skip != 'true'
         uses: actions/attest@v4
         with:
           subject-path: |
@@ -164,8 +164,8 @@ jobs:
             dist/Neokey-arm64-preview.zip
             dist/SHA256SUMS.txt
 
-      if: steps.release.outputs.skip != 'true'
       - name: Update rolling pre-release
+        if: steps.release.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
