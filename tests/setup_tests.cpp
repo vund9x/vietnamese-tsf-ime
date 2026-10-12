@@ -75,6 +75,22 @@ void TestArguments() {
           "an option the command does not use is refused");
     Check(!Parse({L"--install", L"--keep-user-data"}).error.empty(), "--keep-user-data is for removing");
     Check(!Parse({L"--uninstall", L"--no-english"}).error.empty(), "--no-english is for registering");
+    // Which profile Windows starts on: the installer's choice page.
+    Check(Parse({L"--configure-user", L"--default-input", L"en"}).default_profile ==
+                  DefaultNeokeyProfile::English &&
+              Parse({L"--install", L"--default-input", L"VI"}).default_profile ==
+                  DefaultNeokeyProfile::Vietnamese &&
+              Parse({L"--configure-user"}).default_profile == DefaultNeokeyProfile::Keep,
+          "--default-input en|vi, and no choice keeps what is there");
+    Check(!Parse({L"--configure-user", L"--default-input"}).error.empty() &&
+              !Parse({L"--configure-user", L"--default-input", L"fr"}).error.empty(),
+          "--default-input needs vi or en");
+    Check(!Parse({L"--uninstall", L"--default-input", L"en"}).error.empty() &&
+              !Parse({L"--register-elevated", L"--default-input", L"vi"}).error.empty(),
+          "--default-input is for the steps that set the default");
+    Check(!Parse({L"--configure-user", L"--no-english", L"--default-input", L"en"}).error.empty() &&
+              Parse({L"--configure-user", L"--no-english", L"--default-input", L"vi"}).error.empty(),
+          "ENG-Neokey cannot be the default when --no-english leaves it out");
     Check(!Parse({L"--install", L"--log"}).error.empty(), "--log without a path is refused");
     Check(!Parse({L"--install", L"--log", L"--quiet"}).error.empty(), "--log does not swallow a switch");
     Check(!Parse({L"--install", L"extra"}).error.empty(), "a stray argument after a command is refused");
@@ -205,6 +221,24 @@ void TestPackageProblemText() {
                   std::wstring::npos &&
               DescribeSignInScreenFailure(1, true, true, L"").find(L"từ chối") != std::wstring::npos,
           "each sign-in screen failure is put in words, the generic one with its log");
+    // Windows 10 has no IntlCopyInternationalSettings: the copy goes through
+    // the Regional Settings applet on an answer file instead.
+    {
+        const std::wstring answer = BuildCopySettingsAnswerFile();
+        Check(answer.find(L"urn:longhornGlobalizationUnattend") != std::wstring::npos &&
+                  answer.find(L"UserID=\"Current\"") != std::wstring::npos &&
+                  answer.find(L"CopySettingsToSystemAcct=\"true\"") != std::wstring::npos &&
+                  answer.find(L"CopySettingsToDefaultUserAcct=\"false\"") != std::wstring::npos,
+              "the answer file copies the current user's settings to the sign-in screen, not to new users");
+        bool ascii = true;
+        for (const wchar_t ch : answer) {
+            ascii = ascii && ch < 0x80;
+        }
+        Check(ascii, "the answer file is plain ASCII, so it is written as UTF-8 byte for byte");
+        Check(BuildIntlAnswerFileArguments(L"C:\\T e\\a.xml") ==
+                  L"shell32.dll,Control_RunDLL intl.cpl,,/f:\"C:\\T e\\a.xml\"",
+              "rundll32 runs intl.cpl on the answer file, quoted");
+    }
     Check(DescribeSignInScreenCopy(true).find(L"Copy settings") != std::wstring::npos &&
               DescribeSignInScreenCopy(false).find(L"display language") != std::wstring::npos,
           "the confirmation says the display language and formats are copied too");
@@ -269,6 +303,14 @@ void TestResolution() {
           "and another language first does not");
     Check(!InputListResolvesToNeokey(L"", {L"vit"}, kVietnameseTip, L"vi"), "vi is matched as a whole tag");
     Check(!InputListResolvesToNeokey(L"", {}, kVietnameseTip, L"vi"), "an empty list starts on nothing of ours");
+    Check(InputListResolvesToEitherNeokey(kEnglishTip, {L"en-US", L"vi"}) &&
+              InputListResolvesToEitherNeokey(L"", {L"vi"}) &&
+              !InputListResolvesToEitherNeokey(L"", {L"en-US", L"vi"}) &&
+              !InputListResolvesToEitherNeokey(L"0409:00000409", {L"vi"}),
+          "ENG-Neokey as the override starts on Neokey; English first without it does not");
+    Check(IsNeokeyTip(kVietnameseTip) && IsNeokeyTip(kEnglishTip) && !IsNeokeyTip(L"0409:00000409") &&
+              !IsNeokeyTip(L""),
+          "either of the two TIPs is Neokey's");
     Check(std::wstring(kVietnameseTip) == std::wstring(L"042A:") + kClsid + kProfileGuid &&
               std::wstring(kEnglishTip) == std::wstring(L"0409:") + kClsid + kProfileGuid,
           "the TIP strings are built from the class and profile");
@@ -423,6 +465,21 @@ void TestCleanup() {
     Check(OrderVietnameseFirst({L"00000409", L"0000042a", L"00000804", L"00000409"}) ==
               std::vector<std::wstring>({L"0000042a", L"00000409", L"00000804"}),
           "input order: Vietnamese first, the rest in order, no duplicates");
+    Check(OrderLayoutFirst({L"0000042a", L"00000804", L"00000409"}, L"00000409") ==
+              std::vector<std::wstring>({L"00000409", L"0000042a", L"00000804"}),
+          "input order: English first when ENG-Neokey is the default");
+
+    // An install given no choice keeps either of Neokey's profiles, and
+    // otherwise what an earlier configure recorded.
+    Check(ResolveEnglishDefault(DefaultNeokeyProfile::English, kVietnameseTip, std::nullopt) &&
+              !ResolveEnglishDefault(DefaultNeokeyProfile::Vietnamese, kEnglishTip, 1u),
+          "an explicit default wins over the one in place");
+    Check(ResolveEnglishDefault(DefaultNeokeyProfile::Keep, kEnglishTip, std::nullopt) &&
+              !ResolveEnglishDefault(DefaultNeokeyProfile::Keep, kVietnameseTip, 1u),
+          "no choice keeps whichever Neokey profile is the default");
+    Check(ResolveEnglishDefault(DefaultNeokeyProfile::Keep, L"0409:00000409", 1u) &&
+              !ResolveEnglishDefault(DefaultNeokeyProfile::Keep, L"", std::nullopt),
+          "with another default in place, the recorded choice decides, VIE-Neokey without one");
 
     // What the tray's uninstall left on the developer's machine: CTF without
     // Vietnamese, Preload still holding 0000042a.

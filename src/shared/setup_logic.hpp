@@ -31,6 +31,10 @@ inline constexpr wchar_t kVietnameseTip[] =
 inline constexpr wchar_t kEnglishTip[] =
     L"0409:{A85F2C8C-7DE6-4F7F-9B67-4EBEA54D4A4B}{4B6925B4-1E4E-40BC-BDD3-C26BA333CD12}";
 inline constexpr wchar_t kManifestFileName[] = L"neokey_manifest.json";
+// HKCU\Software\Neokey: 1 when ENG-Neokey was made the default, so a later
+// install that is given no choice keeps it. setup.iss reads it too, to show
+// the choice that is in place.
+inline constexpr wchar_t kDefaultEnglishValueName[] = L"DefaultEnglishProfile";
 
 // Every file a portable package must carry, and the manifest must vouch for.
 // package.ps1 writes the manifest from its own copy of this list.
@@ -108,9 +112,20 @@ enum class SetupAction {
     KeyboardLayout,      // --set-keyboard-layout <id> (Administrator; started by the settings window)
 };
 
+// Which of Neokey's two profiles Windows starts on. Both type Vietnamese the
+// same way; they differ in the input language Windows records for the text,
+// which some programs act on (CorelDRAW picks its font by it). Keep leaves an
+// existing choice of either alone, and is VIE-Neokey on a first install.
+enum class DefaultNeokeyProfile : unsigned char {
+    Keep,
+    Vietnamese,
+    English,
+};
+
 struct SetupOptions {
     SetupAction action = SetupAction::None;
     bool english_profile = true;
+    DefaultNeokeyProfile default_profile = DefaultNeokeyProfile::Keep;
     bool keep_user_data = false;
     // No dialogs: the installer and scripts read the exit code and the report.
     bool quiet = false;
@@ -181,6 +196,16 @@ inline SetupOptions ParseSetupArguments(const std::vector<std::wstring>& argumen
             ok = set_action(SetupAction::UnconfigureUser, argument);
         } else if (name == L"--no-english") {
             options.english_profile = false;
+            saw_option = true;
+        } else if (name == L"--default-input") {
+            const std::wstring value = index + 1 < arguments.size() ? ToLowerAscii(arguments[index + 1]) : L"";
+            if (value != L"vi" && value != L"en") {
+                options.error = L"--default-input needs vi or en.";
+                return options;
+            }
+            options.default_profile = value == L"en" ? DefaultNeokeyProfile::English
+                                                     : DefaultNeokeyProfile::Vietnamese;
+            ++index;
             saw_option = true;
         } else if (name == L"--keep-user-data") {
             options.keep_user_data = true;
@@ -255,8 +280,14 @@ inline SetupOptions ParseSetupArguments(const std::vector<std::wstring>& argumen
                            options.action == SetupAction::ConfigureUser;
     const bool removes = options.action == SetupAction::Uninstall ||
                          options.action == SetupAction::UnconfigureUser;
+    const bool configures = options.action == SetupAction::Install ||
+                            options.action == SetupAction::ConfigureUser;
     if (!options.english_profile && !registers) {
         options.error = L"--no-english only applies to --install, --register-elevated and --configure-user.";
+    } else if (options.default_profile != DefaultNeokeyProfile::Keep && !configures) {
+        options.error = L"--default-input only applies to --install and --configure-user.";
+    } else if (options.default_profile == DefaultNeokeyProfile::English && !options.english_profile) {
+        options.error = L"--default-input en needs ENG-Neokey, which --no-english leaves out.";
     } else if (options.keep_user_data && !removes) {
         options.error = L"--keep-user-data only applies to --uninstall and --unconfigure-user.";
     } else if (!options.user_sid.empty() && options.action != SetupAction::SignInScreen) {
@@ -843,6 +874,27 @@ inline std::wstring DescribeDeclinedElevation(bool installing, bool vietnamese) 
 inline constexpr int kExitSignInOtherAccount = 3;
 inline constexpr int kExitSignInUnsupported = 4;
 
+// Windows 10 has no IntlCopyInternationalSettings in intl.cpl; Windows 11
+// added it, with Copy-UserInternationalSettingsToSystem. Every version since
+// Windows 7 instead runs the Regional Settings applet on an answer file, the
+// one deployment scripts use. CopySettingsToSystemAcct is the dialog's
+// "Welcome screen and system accounts", and new user accounts are left alone,
+// as on Windows 11.
+inline std::wstring BuildCopySettingsAnswerFile() {
+    return L"<gs:GlobalizationServices xmlns:gs=\"urn:longhornGlobalizationUnattend\">\r\n"
+           L"  <gs:UserList>\r\n"
+           L"    <gs:User UserID=\"Current\" CopySettingsToDefaultUserAcct=\"false\" "
+           L"CopySettingsToSystemAcct=\"true\"/>\r\n"
+           L"  </gs:UserList>\r\n"
+           L"</gs:GlobalizationServices>\r\n";
+}
+
+// rundll32's arguments for that applet. control.exe would hand it on and
+// return at once; rundll32 runs it in its own process, which can be waited on.
+inline std::wstring BuildIntlAnswerFileArguments(std::wstring_view answer_file) {
+    return L"shell32.dll,Control_RunDLL intl.cpl,,/f:\"" + std::wstring(answer_file) + L"\"";
+}
+
 inline std::wstring DescribeSignInScreenCopy(bool vietnamese) {
     return vietnamese
         ? L"Windows sẽ sao chép ngôn ngữ, bộ gõ, ngôn ngữ hiển thị và định dạng ngày giờ của bạn sang màn hình đăng nhập, màn hình khóa và các tài khoản hệ thống - giống nút Copy settings trong Settings. Windows sẽ hỏi quyền Quản trị viên.\n\nBỏ tích ô này sau đó sẽ trả màn hình đăng nhập về bộ gõ trước đây."
@@ -1091,6 +1143,18 @@ inline bool InputListResolvesToNeokey(std::wstring_view override_tip,
     const std::wstring& first = languages.front();
     return EqualsIgnoreCase(first, neokey_language) ||
            StartsWithIgnoreCase(first, std::wstring(neokey_language) + L"-");
+}
+
+inline bool IsNeokeyTip(std::wstring_view tip) {
+    return EqualsIgnoreCase(tip, kVietnameseTip) || EqualsIgnoreCase(tip, kEnglishTip);
+}
+
+// Either of Neokey's two. ENG-Neokey is reached only through the override: the
+// English language's first input method is usually the US keyboard.
+inline bool InputListResolvesToEitherNeokey(std::wstring_view override_tip,
+                                            const std::vector<std::wstring>& languages) {
+    return InputListResolvesToNeokey(override_tip, languages, kVietnameseTip, L"vi") ||
+           EqualsIgnoreCase(TrimWhitespace(override_tip), kEnglishTip);
 }
 
 // ---------------------------------------------------------------------------
@@ -1389,15 +1453,36 @@ inline RemoveNeokeyPlan PlanRemoveNeokey(std::vector<LanguageEntry> languages,
 
 // Vietnamese first, then everything else in the order it was, without
 // duplicates - the order both Preload and CTF's SortOrder get.
-inline std::vector<std::wstring> OrderVietnameseFirst(const std::vector<std::wstring>& current) {
-    static constexpr wchar_t kVietnameseLayout[] = L"0000042a";
-    std::vector<std::wstring> ordered = {kVietnameseLayout};
+inline std::vector<std::wstring> OrderLayoutFirst(const std::vector<std::wstring>& current,
+                                                  std::wstring_view first) {
+    std::vector<std::wstring> ordered = {std::wstring(first)};
     for (const std::wstring& entry : current) {
-        if (!EqualsIgnoreCase(entry, kVietnameseLayout) && !ContainsTip(ordered, entry)) {
+        if (!EqualsIgnoreCase(entry, first) && !ContainsTip(ordered, entry)) {
             ordered.push_back(entry);
         }
     }
     return ordered;
+}
+
+inline std::vector<std::wstring> OrderVietnameseFirst(const std::vector<std::wstring>& current) {
+    return OrderLayoutFirst(current, L"0000042a");
+}
+
+// Whether ENG-Neokey is the default after this configure. An explicit choice
+// wins; otherwise a default that is already one of Neokey's two stays, and
+// failing both, the choice recorded by an earlier configure.
+inline bool ResolveEnglishDefault(DefaultNeokeyProfile requested, std::wstring_view current_override,
+                                  std::optional<DWORD> recorded_english) {
+    if (requested != DefaultNeokeyProfile::Keep) {
+        return requested == DefaultNeokeyProfile::English;
+    }
+    if (EqualsIgnoreCase(current_override, kEnglishTip)) {
+        return true;
+    }
+    if (EqualsIgnoreCase(current_override, kVietnameseTip)) {
+        return false;
+    }
+    return recorded_english.value_or(0) != 0;
 }
 
 // Preload lists keyboard layouts, CTF's SortOrder the languages the user has.

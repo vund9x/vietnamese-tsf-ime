@@ -98,6 +98,15 @@ WaitingTextMerge MergeRewriteIntoWaitingText(
     size_t backspace_count,
     std::wstring_view chars);
 
+// Esc on a word typed in with Backspaces and characters: the one edit that
+// turns what is on screen into the keys as they were typed, keeping what the
+// two share at the front. "boi", typed as "bio", is two Backspaces and "io".
+struct RevertEdit {
+    size_t backspaces = 0;
+    std::wstring text;
+};
+RevertEdit PlanRevertToKeys(std::wstring_view shown, std::wstring_view keys);
+
 // Reads back the characters of a burst made only of unicode packets, as
 // BuildSyntheticEditInputs writes them. False for any other burst.
 bool ReadUnicodeTextBurst(
@@ -105,6 +114,35 @@ bool ReadUnicodeTextBurst(
 
 // A burst of Backspace presses and nothing else.
 bool IsBackspaceBurst(const INPUT* records, size_t count) noexcept;
+
+// How a record reaches a game in MuMu, as far as the log can show. A
+// Vietnamese letter goes as text; an ASCII letter, a Backspace or a replayed
+// key goes as a key. The two do not keep their order. In one burst, "ệt" came
+// out "tệ" in a game chat, though Neokey had sent "ệ" first. Nothing crosses
+// over within one lane.
+enum class EmulatorInputLane : unsigned char {
+    None,
+    Key,
+    Text,
+};
+
+EmulatorInputLane EmulatorLaneOf(const INPUT& record) noexcept;
+EmulatorInputLane EmulatorLaneOfChar(wchar_t ch) noexcept;
+
+// How many of `records`, from the start, stay in the lane of the first down
+// event. A text burst is split there, so a lane change never happens inside
+// one SendInput call.
+size_t EmulatorSameLaneRunLength(const INPUT* records, size_t count) noexcept;
+
+// What the burst about to go waits after the last one. After Backspaces it
+// waits `backspace_gap`, as before (44eee6b). After a change of lane it waits
+// `lane_gap`. Otherwise it goes at once.
+unsigned EmulatorGapBetween(
+    EmulatorInputLane last,
+    bool last_had_backspace,
+    EmulatorInputLane next,
+    unsigned backspace_gap,
+    unsigned lane_gap) noexcept;
 
 // Fills `out` with the down/up pair for one virtual key, so a replayed key can
 // join the paced queue instead of jumping ahead of it. `extended` sets
