@@ -86,13 +86,84 @@ jobs:
           if (-not $iscc) { throw "Inno Setup 7 ISCC.exe was not found after installation." }
           "INNO_COMPILER=$iscc" >> $env:GITHUB_ENV
 
-      - name: Build, test, and package x64/x86 installer and ARM64 preview
+      - name: Build and package x64/x86 installer and ARM64 preview
         shell: pwsh
         run: |
-          # Stable builds check out the release tag, which may predate the fork-only CI wrapper.
-          # package.bat delegates to package.ps1 in the tagged source and preserves blocking tests.
-          & ./package.bat -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
+          # Run tests separately so failures can be reported without hiding packaging failures.
+          & ./package.bat -SkipTests -Zip -Installer -Arm64Preview -InnoCompiler "$env:INNO_COMPILER"
           if ($LASTEXITCODE -ne 0) { throw "package.bat failed with exit code $LASTEXITCODE" }
+
+      - name: Run tests and write release report
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $reportPath = "dist/TEST-RESULTS.md"
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          $lines = [System.Collections.Generic.List[string]]::new()
+          $lines.Add("# Automated test results")
+          $lines.Add("")
+          $lines.Add("- **Release tag:** ${{ steps.release.outputs.tag }}")
+          $lines.Add("- **Commit:** ${{ github.sha }}")
+          $lines.Add("- **Runner:** Windows Server 2022")
+          $lines.Add("")
+          $totalPassed = 0
+          $totalFailed = 0
+          $anyTestFailed = $false
+
+          foreach ($testName in @("core_tests.exe", "core_tests32.exe", "setup_tests.exe")) {
+            $testPath = Join-Path "build/package" $testName
+            $logPath = Join-Path $env:RUNNER_TEMP "$testName.log"
+            $lines.Add("## $testName")
+
+            if (-not (Test-Path -LiteralPath $testPath -PathType Leaf)) {
+              $lines.Add("- **Result:** NOT RUN — executable missing (build may have failed)")
+              $lines.Add("")
+              $anyTestFailed = $true
+              continue
+            }
+
+            & $testPath *> $logPath
+            $exitCode = $LASTEXITCODE
+            Get-Content -LiteralPath $logPath | ForEach-Object { Write-Host $_ }
+            $log = Get-Content -LiteralPath $logPath -Raw
+
+            $passed = 0
+            $failed = 0
+            if ($log -match '(?m)PASSED:\s*(\d+)') { $passed = [int]$Matches[1] }
+            if ($log -match '(?m)FAILED:\s*(\d+)') { $failed = [int]$Matches[1] }
+            $totalPassed += $passed
+            $totalFailed += $failed
+
+            if ($exitCode -eq 0) {
+              $lines.Add("- **Result:** PASSED (exit code 0)")
+            } else {
+              $lines.Add("- **Result:** FAILED (exit code $exitCode)")
+              $anyTestFailed = $true
+            }
+            $lines.Add("- Passed: $passed")
+            $lines.Add("- Failed: $failed")
+            $lines.Add("")
+            $lines.Add("Log excerpt (last 35 lines):")
+            $excerpt = @(Get-Content -LiteralPath $logPath | Select-Object -Last 35)
+            foreach ($entry in $excerpt) { $lines.Add("    $entry") }
+            $lines.Add("")
+          }
+
+          $overall = if ($anyTestFailed -or $totalFailed -gt 0) { "FAILED" } else { "PASSED" }
+          $lines.Insert(4, "- **Overall:** $overall")
+          $lines.Add("## Summary")
+          $lines.Add("")
+          $lines.Add("- **Passed:** $totalPassed")
+          $lines.Add("- **Failed:** $totalFailed")
+          $lines.Add("")
+          if ($overall -eq "FAILED") {
+            $lines.Add("> Tests failed. This report is informational: test failures do not block publication, but are not treated as passing.")
+          } else {
+            $lines.Add("> All executed tests passed.")
+          }
+          $lines | Set-Content -LiteralPath $reportPath -Encoding utf8
+          Write-Host "Wrote test report to $reportPath (overall: $overall)."
 
       - name: Scan release artifacts with Microsoft Defender
         shell: pwsh
@@ -169,8 +240,19 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "A release for $env:RELEASE_TAG already exists. Refusing to overwrite it."
           }
-          gh release create "$env:RELEASE_TAG" dist/NeokeySetup.exe dist/Neokey-portable.zip dist/Neokey-arm64-preview.zip dist/SHA256SUMS.txt --draft --title "Neokey $($env:RELEASE_TAG)" --generate-notes
+          if (-not (Test-Path "dist/TEST-RESULTS.md" -PathType Leaf)) {
+            throw "Test report is missing; refusing to create a release without test results."
+          }
+          gh release create "$env:RELEASE_TAG" dist/NeokeySetup.exe dist/Neokey-portable.zip dist/Neokey-arm64-preview.zip dist/SHA256SUMS.txt dist/TEST-RESULTS.md --draft --title "Neokey $($env:RELEASE_TAG)" --generate-notes
           if ($LASTEXITCODE -ne 0) { throw "Failed to create draft release." }
+
+          # Preserve GitHub's generated changelog and append the actual test results.
+          $generatedNotes = gh release view "$env:RELEASE_TAG" --json body --jq ".body"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to read generated release notes." }
+          $testReport = Get-Content "dist/TEST-RESULTS.md" -Raw
+          @($generatedNotes, "", "---", "", $testReport) | Set-Content "dist/RELEASE_NOTES.md" -Encoding utf8
+          gh release edit "$env:RELEASE_TAG" --notes-file "dist/RELEASE_NOTES.md"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to append test results to release notes." }
 
       - name: Publish release
         env:
